@@ -1,0 +1,47 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13.9"
+      - name: Install verification tools
+        run: sudo apt-get update && sudo apt-get install -y shellcheck cpio openssh-client
+      - name: Generate script and checksums
+        run: python3 tools/build-script.py
+      - run: make check test checksums
+      - name: Commit verified generated files
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        run: |
+          set -eu
+          git add reos.sh sha256sums.txt
+          if git diff --cached --quiet; then
+            echo 'Generated files are already current.'
+            exit 0
+          fi
+          remote_head=$(git ls-remote origin refs/heads/main | cut -f1)
+          if [ "$remote_head" != "$GITHUB_SHA" ]; then
+            echo 'main has advanced; its newer workflow run will generate the files.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'build: regenerate script and checksums'
+          git push origin HEAD:main

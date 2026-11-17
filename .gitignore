@@ -1,0 +1,6 @@
+/dist/
+/reos.log
+/tmp/
+__pycache__/
+*.pyc
+/out/

@@ -1,0 +1,78 @@
+#!/bin/sh
+set -u
+mkdir -p /var/lib/reos
+LOG=/var/log/reos-firstboot.log
+exec >>"$LOG" 2>&1
+step=starting
+fail() {
+    code=$1
+    printf 'reos: failed: %s (%s)\n' "$step" "$code" >&2
+    printf 'failed: %s (%s)\n' "$step" "$code" > /var/lib/reos/firstboot-status
+    systemctl disable reos-firstboot.service 2>/dev/null || true
+    exit "$code"
+}
+printf 'running\n' > /var/lib/reos/firstboot-status
+export DEBIAN_FRONTEND=noninteractive
+i=0
+while [ "$i" -lt 30 ]; do
+    getent hosts deb.debian.org >/dev/null 2>&1 && break
+    i=$((i + 1))
+    sleep 2
+done
+if [ -d /root/.reos/optimize ]; then
+    for f in /root/.reos/optimize/*.sh; do
+        [ -f "$f" ] || continue
+        step="optimize/${f##*/}"
+        sh "$f" || fail $?
+    done
+fi
+{{if .PostInstallB64}}
+step=post-install
+echo {{.PostInstallB64}} | base64 -d > /root/.reos/post-install.sh || fail $?
+chmod 700 /root/.reos/post-install.sh
+sh /root/.reos/post-install.sh || fail $?
+rm -f /root/.reos/post-install.sh
+{{end}}{{if .Swap}}
+step=swap
+if ! swapon --show --noheadings 2>/dev/null | grep -q .; then
+    : > /swapfile
+    fallocate -l {{.SwapSize}} /swapfile 2>/dev/null || dd if=/dev/zero of=/swapfile bs=1M count={{.SwapMB}} 2>/dev/null || fail $?
+    chmod 600 /swapfile
+    mkswap /swapfile || fail $?
+    swapon /swapfile || fail $?
+    grep -q '^/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+fi
+{{end}}
+if [ -x /root/.reos/cleanup.sh ]; then
+    running="$(uname -r)"
+    newest="$(ls /boot/vmlinuz-* 2>/dev/null | sed 's|.*/vmlinuz-||' | sort -V | tail -n 1)"
+    if [ -n "$newest" ] && [ "$newest" != "$running" ]; then
+        cat > /etc/systemd/system/reos-cleanup.service <<'UNIT'
+[Unit]
+Description=reos post-upgrade cleanup
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/root/.reos/cleanup.sh
+[Service]
+Type=oneshot
+ExecStart=/root/.reos/cleanup.sh
+[Install]
+WantedBy=multi-user.target
+UNIT
+        ln -sf /etc/systemd/system/reos-cleanup.service /etc/systemd/system/multi-user.target.wants/reos-cleanup.service
+        printf 'pending: reboot into %s\n' "$newest" > /var/lib/reos/cleanup-status
+    else
+        step=cleanup
+        sh /root/.reos/cleanup.sh || fail $?
+    fi
+fi
+printf 'complete\n' > /var/lib/reos/firstboot-status
+systemctl disable reos-firstboot.service 2>/dev/null || true
+rm -f /etc/systemd/system/reos-firstboot.service /etc/systemd/system/multi-user.target.wants/reos-firstboot.service
+rm -f /root/.reos/firstboot.sh
+rm -rf /root/.reos/optimize
+rmdir /root/.reos 2>/dev/null || true
+rm -f /var/log/reos-installer-ssh.log
+rm -rf /var/log/installer
+rm -f "$LOG"
+systemctl daemon-reload 2>/dev/null || true
