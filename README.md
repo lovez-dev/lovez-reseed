@@ -24,6 +24,8 @@ To preview the configuration without downloading installer files or changing boo
 sudo ./reos.sh --dry-run --version 13
 ```
 
+Installer SSH uses the configured account. With a non-root account, the installer welcome message gives a `screen` command to open a privileged installer shell. The installed system keeps the selected account and grants it passwordless `sudo`; selecting `root` uses root directly in both stages.
+
 ## Managing a prepared installation
 
 After preparation and before reboot, the `reos` command inspects or cancels the pending reinstallation:

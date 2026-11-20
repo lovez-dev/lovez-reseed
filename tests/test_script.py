@@ -147,7 +147,8 @@ completion_banner
                          'web01', 'UTC', '192.0.2.10', '192.0.2.1', '2001:db8::10', '2001:db8::1',
                          '02:00:00:00:00:11 (ens3)',
                          'ssh -p 2222 admin@192.0.2.10',
-                         'same account and port', 'tail -fn+1 /var/log/syslog',
+                         'same account and port', 'screen -x root/reos-admin',
+                         'tail -fn+1 /var/log/syslog',
                          'not written to the log', 'reboot',
                          'reos reset (before reboot)']:
             self.assertIn(expected, result.stdout)
@@ -207,6 +208,66 @@ completion_banner
         result = subprocess.run(['bash', '-s', '--', '--dry-run', '--version', '13'], input=SCRIPT.read_text(), text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('Preview only', result.stdout)
+
+    def test_installer_ssh_grants_custom_user_a_shared_root_shell(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root_dir = pathlib.Path(temp)
+            replacements = {
+                '/reos-assets': root_dir / 'assets',
+                '/configs': root_dir / 'configs',
+                '/etc': root_dir / 'etc',
+                '/run': root_dir / 'run',
+                '/var': root_dir / 'var',
+                '/usr': root_dir / 'usr',
+            }
+            (root_dir / 'configs').mkdir()
+            (root_dir / 'configs/reos-installer-pass').write_text('password-hash')
+            fakebin = root_dir / 'bin'
+            fakebin.mkdir()
+            ssh_keygen = fakebin / 'ssh-keygen'
+            ssh_keygen.write_text('#!/bin/sh\nexit 0\n')
+            ssh_keygen.chmod(0o755)
+            screen = root_dir / 'usr/bin/screen'
+            screen.parent.mkdir(parents=True)
+            screen.write_text('#!/bin/sh\nexit 0\n')
+            screen.chmod(0o755)
+            script = shell('Username=naipad; SSHPort=22; asset_installer_ssh_installer_ssh_sh_tmpl').stdout
+            for source, target in replacements.items():
+                script = script.replace(source, str(target))
+            calls = root_dir / 'screen-calls'
+            run = f'''screen() {{ printf '%s\\n' "$*" >> {shlex.quote(str(calls))}; }}
+chown() {{ :; }}
+sleep() {{ :; }}
+chmod() {{
+    if [ "$1" = 4755 ]; then
+        [ "${{ALLOW_SETUID:-1}}" = 1 ] || return 1
+        printf 'setuid\\n' >> {shlex.quote(str(calls))}
+    else command chmod "$@"; fi
+}}
+'''
+            result = subprocess.run(['sh', '-c', 'PATH=' + shlex.quote(str(fakebin)) + ':$PATH\n' + run + script], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            screen_calls = calls.read_text()
+            self.assertIn('-dmS reos-admin /bin/sh -c while :; do /bin/sh -i; sleep 1; done', screen_calls)
+            self.assertIn('-S reos-admin -X multiuser on', screen_calls)
+            self.assertIn('-S reos-admin -X acladd naipad', screen_calls)
+            self.assertIn('setuid', screen_calls)
+            motd = (root_dir / 'etc/motd').read_text()
+            self.assertIn('TERM=screen screen -x root/reos-admin', motd)
+
+            (root_dir / 'etc/motd').unlink()
+            failed = subprocess.run(
+                ['sh', '-c', 'ALLOW_SETUID=0; PATH=' + shlex.quote(str(fakebin)) + ':$PATH\n' + run + script],
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(failed.returncode, 0, failed.stderr)
+            self.assertIn('privileged installer shell is unavailable', (root_dir / 'etc/motd').read_text())
+
+            root_script = shell('Username=root; SSHPort=22; asset_installer_ssh_installer_ssh_sh_tmpl').stdout
+            self.assertIn('Installer SSH is already root', root_script)
+            self.assertIn('root_login=yes', root_script)
+            subprocess.run(['sh', '-n'], input=root_script, text=True, check=True)
 
     def test_validation(self):
         cases = [

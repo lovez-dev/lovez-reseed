@@ -714,6 +714,7 @@ completion_banner() {
     if (( InstallerSSH )); then
         banner_row Installer 'SSH enabled; same account and port'
         banner_row Progress 'tail -fn+1 /var/log/syslog (in installer SSH)'
+        [[ $Username == root ]] || banner_row Admin 'screen -x root/reos-admin (privileged installer shell)'
     else banner_row Installer 'SSH disabled; use the server console'; fi
     printf '\n  %sNEXT%s\n' "$BannerAccent" "$BannerReset"
     if (( RebootNow )); then banner_row Action 'Rebooting automatically (--reboot-now)'
@@ -1491,6 +1492,7 @@ grep -qs '"'"'^sshd:'"'"' /etc/group ||
     echo '"'"'sshd:*:65534:'"'"' >>/etc/group
 
 hash=$(cat "$PASS_FILE" 2>/dev/null || true)
+ROOT_SHELL=0
 
 ensure_account() {
     name=$1
@@ -1515,6 +1517,20 @@ if [ "$USER_NAME" = root ]; then
 else
     ensure_account "$USER_NAME" 1000 "/home/$USER_NAME"
     chown 1000:1000 "/home/$USER_NAME" 2>/dev/null || true
+    # The installer has no sudo package; expose a separate root shell through screen.
+    if command -v screen >/dev/null 2>&1 && [ -x /usr/bin/screen ]; then
+        screen -dmS reos-admin /bin/sh -c '"'"'while :; do /bin/sh -i; sleep 1; done'"'"' >/dev/null 2>&1 || true
+        attempt=0
+        while [ "$attempt" -lt 5 ]; do
+            if screen -S reos-admin -X multiuser on >/dev/null 2>&1 &&
+                screen -S reos-admin -X acladd "$USER_NAME" >/dev/null 2>&1; then
+                chmod 4755 /usr/bin/screen && ROOT_SHELL=1
+                break
+            fi
+            attempt=$((attempt + 1))
+            sleep 1
+        done
+    fi
 fi
 
 if [ -s "$KEYS_FILE" ]; then
@@ -1575,6 +1591,24 @@ if [ -n "${STY:-}" ] && [ -x /usr/bin/screen ]; then
         fi
         printf '"'"' Attach to the installer (shared with the local console):\n   %s\n\n'"'"' "$attach" >>/etc/motd
     fi
+fi
+
+if [ "$USER_NAME" = root ]; then
+    cat >>/etc/motd <<'"'"'EOF'"'"'
+ Installer SSH is already root; no sudo command is needed.
+
+EOF
+elif [ "$ROOT_SHELL" -eq 1 ]; then
+    cat >>/etc/motd <<'"'"'EOF'"'"'
+ Open a privileged installer shell:
+   TERM=screen screen -x root/reos-admin
+
+EOF
+else
+    cat >>/etc/motd <<'"'"'EOF'"'"'
+ A privileged installer shell is unavailable in this session.
+
+EOF
 fi
 
 cat >>/etc/motd <<'"'"'EOF'"'"'

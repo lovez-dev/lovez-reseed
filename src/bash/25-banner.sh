@@ -53,6 +53,7 @@ completion_banner() {
     if (( InstallerSSH )); then
         banner_row Installer 'SSH enabled; same account and port'
         banner_row Progress 'tail -fn+1 /var/log/syslog (in installer SSH)'
+        [[ $Username == root ]] || banner_row Admin 'screen -x root/reos-admin (privileged installer shell)'
     else banner_row Installer 'SSH disabled; use the server console'; fi
     printf '\n  %sNEXT%s\n' "$BannerAccent" "$BannerReset"
     if (( RebootNow )); then banner_row Action 'Rebooting automatically (--reboot-now)'
