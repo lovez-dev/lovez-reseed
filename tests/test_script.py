@@ -38,6 +38,51 @@ class ScriptTests(unittest.TestCase):
             self.assertIn('failed: post-install (42)', (root / 'log/reos-firstboot.log').read_text())
             self.assertTrue((root / 'scripts/post-install.sh').exists())
 
+    def test_successful_firstboot_removes_reos_status_directory(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            (root / 'state').mkdir()
+            (root / 'log').mkdir()
+            script = shell('asset_firstboot_firstboot_sh_tmpl').stdout
+            for source, target in [
+                ('/var/lib/reos', root / 'state'),
+                ('/var/log', root / 'log'),
+                ('/root/.reos', root / 'scripts'),
+                ('/etc/systemd/system', root / 'systemd'),
+            ]:
+                script = script.replace(source, str(target))
+            result = subprocess.run(['sh', '-c', 'systemctl() { :; }; getent() { :; };\n' + script], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse((root / 'state').exists())
+
+    def test_successful_cleanup_removes_reos_status_directory_but_failure_keeps_it(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            (root / 'state').mkdir()
+            (root / 'log').mkdir()
+            apt_config = root / 'etc/apt/apt.conf.d/80reos-download-retries'
+            apt_config.parent.mkdir(parents=True)
+            apt_config.write_text('temporary reos apt config')
+            script = (ROOT / 'src/assets/firstboot/cleanup.sh').read_text()
+            for source, target in [
+                ('/var/lib/reos', root / 'state'),
+                ('/var/log', root / 'log'),
+                ('/root/.reos', root / 'scripts'),
+                ('/etc/systemd/system', root / 'systemd'),
+                ('/etc/apt', root / 'etc/apt'),
+            ]:
+                script = script.replace(source, str(target))
+            script = script.replace('apt-get', 'apt_get')
+            success = subprocess.run(['sh', '-c', 'apt_get() { :; }; systemctl() { :; };\n' + script], capture_output=True, text=True)
+            self.assertEqual(success.returncode, 0, success.stderr)
+            self.assertFalse((root / 'state').exists())
+            self.assertFalse(apt_config.exists())
+
+            (root / 'state').mkdir()
+            failure = subprocess.run(['sh', '-c', 'apt_get() { return 7; }; systemctl() { :; };\n' + script], capture_output=True, text=True)
+            self.assertEqual(failure.returncode, 7)
+            self.assertEqual((root / 'state/cleanup-status').read_text().strip(), 'failed: cleanup (7)')
+
     def test_proxy_reaches_https_installer_and_normalizes_socks(self):
         for proxy, expected in [('http://proxy:8888', 'http://proxy:8888'), ('socks5://proxy:1080', 'socks5h://proxy:1080'), ('socks5h://proxy:1080', 'socks5h://proxy:1080')]:
             with self.subTest(proxy=proxy):

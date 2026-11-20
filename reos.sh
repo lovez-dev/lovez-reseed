@@ -1043,12 +1043,14 @@ fail() {
 }
 apt-get autoremove --purge -y || fail $?
 apt-get clean || fail $?
+rm -f /etc/apt/apt.conf.d/80reos-download-retries
 printf 'complete\n' > /var/lib/reos/cleanup-status
 systemctl disable reos-cleanup.service 2>/dev/null || true
 rm -f /etc/systemd/system/reos-cleanup.service /etc/systemd/system/multi-user.target.wants/reos-cleanup.service
 rm -rf /root/.reos
 systemctl daemon-reload 2>/dev/null || true
 rm -f "$LOG"
+rm -rf /var/lib/reos
 REOS_EMBEDDED_ASSET
 }
 
@@ -1059,6 +1061,7 @@ mkdir -p /var/lib/reos
 LOG=/var/log/reos-firstboot.log
 exec >>"$LOG" 2>&1
 step=starting
+cleanup_pending=0
 fail() {
     code=$1
     printf '"'"'reos: failed: %s (%s)\n'"'"' "$step" "$code" >&2
@@ -1129,11 +1132,13 @@ WantedBy=multi-user.target
 UNIT
         ln -sf /etc/systemd/system/reos-cleanup.service /etc/systemd/system/multi-user.target.wants/reos-cleanup.service
         printf '"'"'pending: reboot into %s\n'"'"' "$newest" > /var/lib/reos/cleanup-status
+        cleanup_pending=1
     else
         step=cleanup
         sh /root/.reos/cleanup.sh || fail $?
     fi
 fi
+mkdir -p /var/lib/reos
 printf '"'"'complete\n'"'"' > /var/lib/reos/firstboot-status
 systemctl disable reos-firstboot.service 2>/dev/null || true
 rm -f /etc/systemd/system/reos-firstboot.service /etc/systemd/system/multi-user.target.wants/reos-firstboot.service
@@ -1144,6 +1149,9 @@ rm -f /var/log/reos-installer-ssh.log
 rm -rf /var/log/installer
 rm -f "$LOG"
 systemctl daemon-reload 2>/dev/null || true
+if [ "$cleanup_pending" -eq 0 ]; then
+    rm -rf /var/lib/reos
+fi
 '
 }
 

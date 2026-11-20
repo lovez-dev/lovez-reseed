@@ -11,9 +11,11 @@ fail() {
 }
 apt-get autoremove --purge -y || fail $?
 apt-get clean || fail $?
+rm -f /etc/apt/apt.conf.d/80reos-download-retries
 printf 'complete\n' > /var/lib/reos/cleanup-status
 systemctl disable reos-cleanup.service 2>/dev/null || true
 rm -f /etc/systemd/system/reos-cleanup.service /etc/systemd/system/multi-user.target.wants/reos-cleanup.service
 rm -rf /root/.reos
 systemctl daemon-reload 2>/dev/null || true
 rm -f "$LOG"
+rm -rf /var/lib/reos
