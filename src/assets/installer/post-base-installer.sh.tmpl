@@ -4,6 +4,21 @@ set -u
 
 sources=/target/etc/apt/sources.list
 sources_dir=/target/etc/apt/sources.list.d
+apt_config_dir=/target/etc/apt/apt.conf.d
+
+if ! mkdir -p "$apt_config_dir"; then
+    echo 'reos: Cannot create target APT configuration directory' >&2
+    exit 1
+fi
+if ! cat >"$apt_config_dir/80reos-download-retries" <<'APTCONF'
+Acquire::Retries "3";
+Acquire::http::Timeout "30";
+Acquire::https::Timeout "30";
+APTCONF
+then
+    echo 'reos: Cannot write target APT download retry configuration' >&2
+    exit 1
+fi
 
 if [ -f "$sources" ]; then
     grep -qF '{{.SecurityRepo}}' "$sources" && exit 0

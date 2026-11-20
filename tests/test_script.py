@@ -346,6 +346,45 @@ fetch() {{ cp "$WORK/input" "$2"; }}
             self.assertIn('https://deb.debian.org/debian-security trixie-security main', result.stdout)
             self.assertNotIn('packages-security', result.stdout)
 
+    def test_post_base_hook_sets_bounded_apt_retries_before_source_shortcuts(self):
+        with tempfile.TemporaryDirectory() as temp:
+            target = pathlib.Path(temp) / 'target'
+            apt_config = target / 'etc/apt/apt.conf.d/80reos-download-retries'
+            sources = target / 'etc/apt/sources.list'
+            sources.parent.mkdir(parents=True)
+            sources.write_text('deb https://deb.debian.org/debian trixie main\n')
+            hook = shell('asset_installer_post_base_installer_sh_tmpl').stdout
+            hook = hook.replace('/target', str(target))
+            subprocess.run(['sh', '-c', hook], check=True, capture_output=True, text=True)
+            self.assertEqual(apt_config.read_text(), 'Acquire::Retries "3";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n')
+
+    def test_system_dns_filters_tailscale_and_loopback_resolvers(self):
+        with tempfile.TemporaryDirectory() as temp:
+            resolv = pathlib.Path(temp) / 'resolv.conf'
+            resolv.write_text('''
+nameserver 100.100.100.100
+nameserver fd7a:115c:a1e0::53
+nameserver 127.0.0.53
+nameserver ::1
+nameserver 9.9.9.9
+nameserver 2606:4700:4700::1111
+''')
+            result = shell('read_system_dns ' + shlex.quote(str(resolv)))
+            self.assertEqual(result.stdout.split(), ['9.9.9.9', '2606:4700:4700::1111'])
+            resolv.write_text('nameserver 100.100.100.100\nnameserver fd7a:115c:a1e0::53\n')
+            self.assertEqual(shell('read_system_dns ' + shlex.quote(str(resolv))).stdout, '')
+
+    def test_detect_network_dns_fallback_and_explicit_override(self):
+        mock = r'''
+ip() { :; }
+read_system_dns() { return 0; }
+Interface=eth0
+'''
+        result = shell(mock + 'detect_network; [[ $DNS == "1.1.1.1 8.8.8.8" ]]')
+        self.assertEqual(result.returncode, 0)
+        result = shell(mock + 'DNS=9.9.9.9; DNSExplicit=1; read_system_dns() { die "explicit DNS was replaced"; }; detect_network; [[ $DNS == 9.9.9.9 ]]')
+        self.assertEqual(result.returncode, 0)
+
     def test_installer_pair_retries_both_files_from_one_manifest(self):
         with tempfile.TemporaryDirectory() as temp:
             directory = pathlib.Path(temp)

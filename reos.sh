@@ -446,6 +446,12 @@ preserve_partitions() {
 }
 
 route_field() { awk -v name="$1" '{for(i=1;i<NF;i++) if($i==name) {print $(i+1); exit}}'; }
+read_system_dns() {
+    awk '$1=="nameserver" {
+        address=tolower($2)
+        if (address !~ /^127\./ && address != "::1" && address != "100.100.100.100" && address != "fd7a:115c:a1e0::53") printf "%s ", $2
+    }' "${1:-/etc/resolv.conf}" 2>/dev/null || true
+}
 detect_network() {
     local route4 route6 addr4 addr6 dynamic4=0 dynamic6=0 configured='' detected_gateway dns v6_mode=auto
     route4=$(ip -4 route show default 2>/dev/null | head -n1 || true)
@@ -498,7 +504,7 @@ detect_network() {
     InstallerV6Gateway=${IPv6Gateway:-$(printf '%s\n' "$route6" | route_field via)}
     InstallerV6Gateway=${InstallerV6Gateway%%%*}
     if (( !DNSExplicit )); then
-        DNS=$(awk '$1=="nameserver" && $2 !~ /^(127\.|::1$)/ {printf "%s ",$2}' /etc/resolv.conf 2>/dev/null || true)
+        DNS=$(read_system_dns /etc/resolv.conf)
         if [[ -z $DNS ]]; then
             DNS='1.1.1.1 8.8.8.8'
         fi
@@ -1317,6 +1323,21 @@ set -u
 
 sources=/target/etc/apt/sources.list
 sources_dir=/target/etc/apt/sources.list.d
+apt_config_dir=/target/etc/apt/apt.conf.d
+
+if ! mkdir -p "$apt_config_dir"; then
+    echo '"'"'reos: Cannot create target APT configuration directory'"'"' >&2
+    exit 1
+fi
+if ! cat >"$apt_config_dir/80reos-download-retries" <<'"'"'APTCONF'"'"'
+Acquire::Retries "3";
+Acquire::http::Timeout "30";
+Acquire::https::Timeout "30";
+APTCONF
+then
+    echo '"'"'reos: Cannot write target APT download retry configuration'"'"' >&2
+    exit 1
+fi
 
 if [ -f "$sources" ]; then
     grep -qF '"'"''
