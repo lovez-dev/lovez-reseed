@@ -21,8 +21,7 @@ check:
 	$(PYTHON) tools/build-script.py --check
 	bash -n reos.sh
 	bash -n tests/live-download.sh
-	sh -n install.sh
-	shellcheck -S warning reos.sh install.sh tests/live-download.sh
+	shellcheck -S warning reos.sh tests/live-download.sh
 
 clean:
 	rm -rf $(OUT)

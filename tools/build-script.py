@@ -74,7 +74,7 @@ def build():
         text = path.read_text(encoding='utf-8')
         body = compile_template(text) if '{{' in text else "cat <<'REOS_EMBEDDED_ASSET'\n" + text.rstrip('\n') + '\nREOS_EMBEDDED_ASSET'
         parts.append('asset_' + name + '() {\n' + body + '\n}')
-    parts.append('if [[ ${BASH_SOURCE[0]} == "$0" ]]; then main "$@"; fi')
+    parts.append('if [[ ${BASH_SOURCE[0]:-} == "$0" || -z ${BASH_SOURCE[0]:-} ]]; then main "$@"; fi')
     return '\n\n'.join(parts) + '\n'
 
 

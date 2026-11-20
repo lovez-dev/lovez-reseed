@@ -18,7 +18,7 @@ release_file() {
         if ! gpgv "${KeyringArgs[@]}" --output "$out" "$out.signed" 2>"$WORK/gpg-error"; then
             if (( allow_https_missing_key )) && [[ -z $Keyring ]] && official_debian_mirror "$base/dists/$suite/InRelease" && missing_archive_key; then
                 cleartext_release "$out.signed" "$out" || return 1
-                message "Warning: Debian archive key is unavailable; resolving stable metadata over HTTPS from $base"
+                message "Warning: Debian archive key is unavailable; using Debian release metadata over HTTPS from $base"
             else
                 return 1
             fi
@@ -28,7 +28,7 @@ release_file() {
         fetch "$base/dists/$suite/Release.gpg" "$out.sig" 1048576 || return 1
         if ! gpgv "${KeyringArgs[@]}" "$out.sig" "$out" 2>"$WORK/gpg-error"; then
             if (( allow_https_missing_key )) && [[ -z $Keyring ]] && official_debian_mirror "$base/dists/$suite/Release" && missing_archive_key; then
-                message "Warning: Debian archive key is unavailable; resolving stable metadata over HTTPS from $base"
+                message "Warning: Debian archive key is unavailable; using Debian release metadata over HTTPS from $base"
             else
                 return 1
             fi
@@ -65,11 +65,11 @@ check_digest() {
     [[ $(sha256sum "$file" | cut -d' ' -f1) == "${hash,,}" ]]
 }
 authenticate() {
-    local url=$1 file=$2 rest base suite path digest hash size
+    local url=$1 file=$2 allow_https_missing_key=${3:-0} rest base suite path digest hash size
     : > "$WORK/gpg-error"
     if [[ $url == */dists/* ]]; then
         base=${url%%/dists/*}; rest=${url#*/dists/}; suite=${rest%%/*}; path=${rest#*/}
-        release_file "$base" "$suite" "$WORK/auth-release" || return 1
+        release_file "$base" "$suite" "$WORK/auth-release" "$allow_https_missing_key" || return 1
         digest=$(release_digest "$WORK/auth-release" "$path") || return 1
         read -r hash size <<< "$digest"
         check_digest "$file" "$hash" "$size"
@@ -180,7 +180,7 @@ inject_udebs() {
     local base path="main/debian-installer/binary-$Arch/Packages.gz" index_ok=0
     for base in "$SelectedMirror" https://deb.debian.org/debian; do
         fetch "$base/dists/$Suite/$path" "$WORK/Packages.gz" || continue
-        authenticate "$base/dists/$Suite/$path" "$WORK/Packages.gz" || continue
+        authenticate "$base/dists/$Suite/$path" "$WORK/Packages.gz" 1 || continue
         gzip -dc "$WORK/Packages.gz" > "$WORK/Packages" || continue
         index_ok=1; break
     done

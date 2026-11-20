@@ -146,7 +146,6 @@ completion_banner
     def test_build_current_and_syntax(self):
         subprocess.run(['python3', str(ROOT / 'tools/build-script.py'), '--check'], check=True)
         subprocess.run(['bash', '-n', str(SCRIPT)], check=True)
-        subprocess.run(['sh', '-n', str(ROOT / 'install.sh')], check=True)
 
     def test_preview_off_subnet_ipv6_and_secrets(self):
         result = subprocess.run(['bash', str(SCRIPT), '--dry-run', '--version', '13', '--disk', '/dev/vda', '--interface', 'eth0', '--ip', '192.0.2.10', '--netmask', '255.255.255.255', '--gateway', '198.51.100.1', '--ipv6', '2001:db8::10/128', '--ipv6-gateway', 'fe80::1', '--password', 'secret-value', '--system-size', '10G'], text=True, capture_output=True)
@@ -158,6 +157,11 @@ completion_banner
         self.assertIn('d-i partman/default_filesystem string ext4', result.stdout)
         self.assertNotIn('secret-value', result.stdout)
         self.assertNotIn('{{', result.stdout)
+
+    def test_script_executes_when_piped_to_bash(self):
+        result = subprocess.run(['bash', '-s', '--', '--dry-run', '--version', '13'], input=SCRIPT.read_text(), text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('Preview only', result.stdout)
 
     def test_validation(self):
         cases = [
@@ -293,7 +297,7 @@ RELEASE
 gpgv() {{ printf 'gpg: NO_PUBKEY test-key\\n' >&2; return 1; }}
 '''
             result = shell(setup + 'resolve_suite; [[ $Suite == trixie && $ReleaseNumber == 13 ]]')
-            self.assertIn('resolving stable metadata over HTTPS', result.stdout)
+            self.assertIn('using Debian release metadata over HTTPS', result.stdout)
 
     def test_stable_does_not_bypass_missing_key_for_custom_mirror_or_keyring(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -328,6 +332,61 @@ gpgv() {{ printf 'gpg: BAD signature\n' >&2; return 1; }}
 '''
             result = shell(setup + 'resolve_suite', ok=False)
             self.assertNotEqual(result.returncode, 0)
+
+    def test_official_package_index_uses_https_digest_when_archive_key_is_missing(self):
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            package_index = b'Packages index'
+            digest = hashlib.sha256(package_index).hexdigest()
+            (directory / 'Packages.gz').write_bytes(package_index)
+            metadata = f'''-----BEGIN PGP SIGNED MESSAGE-----
+Hash: SHA512
+
+Codename: trixie
+Version: 13.4
+SHA256:
+ {digest} {len(package_index)} main/debian-installer/binary-amd64/Packages.gz
+-----BEGIN PGP SIGNATURE-----
+signature
+-----END PGP SIGNATURE-----
+'''
+            setup = f'''WORK={shlex.quote(temp)}; Keyring='';
+fetch() {{ printf '%s' {shlex.quote(metadata)} > "$2"; }}
+gpgv() {{ printf 'gpg: NO_PUBKEY test-key\\n' >&2; return 1; }}
+'''
+            result = shell(setup + 'authenticate https://deb.debian.org/debian/dists/trixie/main/debian-installer/binary-amd64/Packages.gz "$WORK/Packages.gz" 1')
+            self.assertIn('using Debian release metadata over HTTPS', result.stdout)
+
+    def test_dependency_bootstrap_skips_duplicate_setup_in_same_process(self):
+        shell('HostDependenciesReady=1; apt-get() { die "unexpected dependency setup"; }; bootstrap_dependencies')
+
+    def test_package_index_https_fallback_rejects_custom_mirror_and_keyring(self):
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            package_index = b'Packages index'
+            digest = hashlib.sha256(package_index).hexdigest()
+            (directory / 'Packages.gz').write_bytes(package_index)
+            metadata = f'''-----BEGIN PGP SIGNED MESSAGE-----
+Hash: SHA512
+
+Codename: trixie
+SHA256:
+ {digest} {len(package_index)} main/debian-installer/binary-amd64/Packages.gz
+-----BEGIN PGP SIGNATURE-----
+signature
+-----END PGP SIGNATURE-----
+'''
+            setup = f'''WORK={shlex.quote(temp)}; Keyring='';
+fetch() {{ printf '%s' {shlex.quote(metadata)} > "$2"; }}
+gpgv() {{ printf 'gpg: NO_PUBKEY test-key\\n' >&2; return 1; }}
+'''
+            for operation in [
+                'authenticate https://mirror.example/debian/dists/trixie/main/debian-installer/binary-amd64/Packages.gz "$WORK/Packages.gz" 1',
+                'Keyring=/tmp/custom.gpg; authenticate https://deb.debian.org/debian/dists/trixie/main/debian-installer/binary-amd64/Packages.gz "$WORK/Packages.gz" 1',
+                'authenticate https://deb.debian.org/debian/dists/trixie/main/debian-installer/binary-amd64/Packages.gz "$WORK/Packages.gz"',
+            ]:
+                with self.subTest(operation=operation):
+                    self.assertNotEqual(shell(setup + operation, ok=False).returncode, 0)
 
     def test_template_branches_and_script_syntax(self):
         variants = [

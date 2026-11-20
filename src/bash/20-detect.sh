@@ -192,6 +192,21 @@ render_interfaces() {
     if [[ -n $InstallerV6Address || -n ${addr6:-} ]]; then [[ -z $DNS ]] || printf '    dns-nameservers %s\n' "$DNS"; fi
 }
 
+bootstrap_dependencies() {
+    (( HostDependenciesReady )) && return 0
+    (( EUID == 0 )) || die 'Root privileges required to install reos dependencies'
+    [[ $(uname -s) == Linux && -r /etc/os-release ]] || die 'Automatic dependency setup requires Debian Linux'
+    . /etc/os-release
+    [[ ${ID:-} == debian ]] || die "Automatic dependency setup supports Debian only (detected: ${ID:-unknown})"
+    need apt-get
+    message 'Updating Debian package indexes and installing reos dependencies ...'
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        bash ca-certificates coreutils cpio curl debian-archive-keyring debian-keyring \
+        dpkg findutils gawk gpgv grep grub-common grub2-common gzip iproute2 openssh-client openssl sed util-linux
+    HostDependenciesReady=1
+}
+
 environment_check() {
     (( EUID == 0 )) || die 'Root privileges required'
     [[ $(uname -s) == Linux ]] || die 'Preparation requires Linux'

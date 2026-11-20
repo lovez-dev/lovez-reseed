@@ -9,23 +9,19 @@ Reinstall Debian over the network by preparing the installer and a one-time GRUB
 On an existing Debian system with root access, GRUB2 and Secure Boot disabled, run as root:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/lovez-dev/reos/main/install.sh \
-  | sudo bash -s -- \
-    --yes \
-    --reboot-now \
-    --user admin \
-    --password 'YOUR_STRONG_PASSWORD'
+curl -fL https://raw.githubusercontent.com/lovez-dev/reos/main/reos.sh -o reos.sh
+chmod +x reos.sh
+sudo ./reos.sh --yes --reboot-now --user admin --password 'YOUR_STRONG_PASSWORD'
 ```
 
-The installer verifies its download against the signed checksum from the same main-branch commit, installs `reos`, prepares the installer files and a one-time GRUB entry, skips confirmation, and reboots into the reinstallation. The login password is shown once after preparation; save it before the machine reboots.
+The script updates Debian package indexes, installs its host dependencies, verifies the downloaded installer files, prepares the installer files and a one-time GRUB entry, skips confirmation, and reboots into the reinstallation. The login password is shown once after preparation; save it before the machine reboots.
 
-Stable release detection and kernel/initrd downloads use Debian's signed release metadata. If the default Debian keyring lacks an archive key, `reos` can resolve stable metadata or use an official Debian HTTPS checksum manifest over TLS and prints a warning; installer files are still checked against SHA-256 digests from that manifest. Custom mirrors and an explicitly selected keyring do not use this fallback.
+Stable release detection, kernel/initrd downloads, and the installer SSH package index use Debian's signed release metadata. If the default Debian keyring lacks an archive key, `reos` can use official Debian HTTPS metadata over TLS and prints a warning; downloaded installer files and the package index are still checked against SHA-256 digests in that metadata. Custom mirrors and an explicitly selected keyring do not use this fallback.
 
 To preview the configuration without downloading installer files or changing boot configuration:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/lovez-dev/reos/main/install.sh \
-  | sudo bash -s -- --dry-run --version 13
+sudo ./reos.sh --dry-run --version 13
 ```
 
 ## Managing a prepared installation

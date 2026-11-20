@@ -25,6 +25,7 @@ scratch() {
 }
 
 defaults() {
+    HostDependenciesReady=0
     Suite=stable Mirror='' Proxy='' IP='' Netmask='' Gateway='' DNS='' IPv6='' IPv6Gateway='' IPv6DNS=''
     Hostname='' Interface=auto Username=root Password='' SSHPort=22 AuthorizedKeysURL=''
     Disk='' ESPSize=106 SystemSize='' SystemSizeMB=0

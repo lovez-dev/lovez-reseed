@@ -25,6 +25,7 @@ scratch() {
 }
 
 defaults() {
+    HostDependenciesReady=0
     Suite=stable Mirror='' Proxy='' IP='' Netmask='' Gateway='' DNS='' IPv6='' IPv6Gateway='' IPv6DNS=''
     Hostname='' Interface=auto Username=root Password='' SSHPort=22 AuthorizedKeysURL=''
     Disk='' ESPSize=106 SystemSize='' SystemSizeMB=0
@@ -204,7 +205,7 @@ release_file() {
         if ! gpgv "${KeyringArgs[@]}" --output "$out" "$out.signed" 2>"$WORK/gpg-error"; then
             if (( allow_https_missing_key )) && [[ -z $Keyring ]] && official_debian_mirror "$base/dists/$suite/InRelease" && missing_archive_key; then
                 cleartext_release "$out.signed" "$out" || return 1
-                message "Warning: Debian archive key is unavailable; resolving stable metadata over HTTPS from $base"
+                message "Warning: Debian archive key is unavailable; using Debian release metadata over HTTPS from $base"
             else
                 return 1
             fi
@@ -214,7 +215,7 @@ release_file() {
         fetch "$base/dists/$suite/Release.gpg" "$out.sig" 1048576 || return 1
         if ! gpgv "${KeyringArgs[@]}" "$out.sig" "$out" 2>"$WORK/gpg-error"; then
             if (( allow_https_missing_key )) && [[ -z $Keyring ]] && official_debian_mirror "$base/dists/$suite/Release" && missing_archive_key; then
-                message "Warning: Debian archive key is unavailable; resolving stable metadata over HTTPS from $base"
+                message "Warning: Debian archive key is unavailable; using Debian release metadata over HTTPS from $base"
             else
                 return 1
             fi
@@ -251,11 +252,11 @@ check_digest() {
     [[ $(sha256sum "$file" | cut -d' ' -f1) == "${hash,,}" ]]
 }
 authenticate() {
-    local url=$1 file=$2 rest base suite path digest hash size
+    local url=$1 file=$2 allow_https_missing_key=${3:-0} rest base suite path digest hash size
     : > "$WORK/gpg-error"
     if [[ $url == */dists/* ]]; then
         base=${url%%/dists/*}; rest=${url#*/dists/}; suite=${rest%%/*}; path=${rest#*/}
-        release_file "$base" "$suite" "$WORK/auth-release" || return 1
+        release_file "$base" "$suite" "$WORK/auth-release" "$allow_https_missing_key" || return 1
         digest=$(release_digest "$WORK/auth-release" "$path") || return 1
         read -r hash size <<< "$digest"
         check_digest "$file" "$hash" "$size"
@@ -366,7 +367,7 @@ inject_udebs() {
     local base path="main/debian-installer/binary-$Arch/Packages.gz" index_ok=0
     for base in "$SelectedMirror" https://deb.debian.org/debian; do
         fetch "$base/dists/$Suite/$path" "$WORK/Packages.gz" || continue
-        authenticate "$base/dists/$Suite/$path" "$WORK/Packages.gz" || continue
+        authenticate "$base/dists/$Suite/$path" "$WORK/Packages.gz" 1 || continue
         gzip -dc "$WORK/Packages.gz" > "$WORK/Packages" || continue
         index_ok=1; break
     done
@@ -611,6 +612,21 @@ render_interfaces() {
         printf '\niface %s inet6 %s\n    accept_ra 2\n' "$v6_iface" "${v6_mode:-auto}"
     fi
     if [[ -n $InstallerV6Address || -n ${addr6:-} ]]; then [[ -z $DNS ]] || printf '    dns-nameservers %s\n' "$DNS"; fi
+}
+
+bootstrap_dependencies() {
+    (( HostDependenciesReady )) && return 0
+    (( EUID == 0 )) || die 'Root privileges required to install reos dependencies'
+    [[ $(uname -s) == Linux && -r /etc/os-release ]] || die 'Automatic dependency setup requires Debian Linux'
+    . /etc/os-release
+    [[ ${ID:-} == debian ]] || die "Automatic dependency setup supports Debian only (detected: ${ID:-unknown})"
+    need apt-get
+    message 'Updating Debian package indexes and installing reos dependencies ...'
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        bash ca-certificates coreutils cpio curl debian-archive-keyring debian-keyring \
+        dpkg findutils gawk gpgv grep grub-common grub2-common gzip iproute2 openssh-client openssl sed util-linux
+    HostDependenciesReady=1
 }
 
 environment_check() {
@@ -881,6 +897,7 @@ GRUB
     [[ -z $BOOT_BACKUP ]] || rm -rf -- "$BOOT_BACKUP"
 }
 prepare() {
+    bootstrap_dependencies
     environment_check
     [[ ! -L /boot/reos ]] || die 'Refusing a symlink installer directory'
     exec 9>/run/lock/reos.lock
@@ -2303,4 +2320,4 @@ d-i finish-install/reboot_in_progress note
 '
 }
 
-if [[ ${BASH_SOURCE[0]} == "$0" ]]; then main "$@"; fi
+if [[ ${BASH_SOURCE[0]:-} == "$0" || -z ${BASH_SOURCE[0]:-} ]]; then main "$@"; fi
