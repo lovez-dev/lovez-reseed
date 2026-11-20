@@ -212,7 +212,7 @@ environment_check() {
     [[ $(uname -s) == Linux ]] || die 'Preparation requires Linux'
     [[ -f /etc/debian_version ]] || die 'Preparation requires Debian'
     [[ -f /etc/grub.d/40_custom ]] || die 'GRUB2 /etc/grub.d/40_custom not found'
-    local virt=none code=0 secure mem tool
+    local virt=none code=0 secure mem
     if command -v systemd-detect-virt >/dev/null 2>&1; then virt=$(systemd-detect-virt) || code=$?; fi
     if (( Firmware )); then
         need systemd-detect-virt
@@ -227,6 +227,10 @@ environment_check() {
     done
     mem=$(awk '/^MemTotal:/ {print int($2/1024)}' /proc/meminfo)
     (( mem >= 384 )) || die 'At least 384 MB RAM required'
+}
+
+dependencies_check() {
+    local tool
     for tool in curl gzip cpio dpkg-deb ip lsblk findmnt blkid sha256sum openssl awk sed find sort stat flock grub-mkrelpath grub-probe grub-reboot update-grub; do need "$tool"; done
     need gpgv; [[ -r ${Keyring:-/usr/share/keyrings/debian-archive-keyring.gpg} ]] || die 'Trusted Debian keyring missing'
     [[ -z $AuthorizedKeysURL ]] || need ssh-keygen

@@ -177,8 +177,9 @@ GRUB
     [[ -z $BOOT_BACKUP ]] || rm -rf -- "$BOOT_BACKUP"
 }
 prepare() {
-    bootstrap_dependencies
     environment_check
+    bootstrap_dependencies
+    dependencies_check
     [[ ! -L /boot/reos ]] || die 'Refusing a symlink installer directory'
     exec 9>/run/lock/reos.lock
     flock -n 9 || die 'Another reos process is running'
