@@ -97,7 +97,11 @@ parse() {
         if (( boolean )); then
             case ${val,,} in true|t|1) val=1;; false|f|0) val=0;; *) die "Invalid boolean for --$name";; esac
         elif [[ $val == *$'\n'* || $val == *$'\r'* ]]; then die "--$name must not contain newlines"; fi
-        case $field in KeepPaths) KeepPaths+=("$val");; *) printf -v "$field" '%s' "$val";; esac
+        case $field in
+            KeepPaths) KeepPaths+=("$val");;
+            Install) [[ -z $val ]] || Install+=" $val";;
+            *) printf -v "$field" '%s' "$val";;
+        esac
     done
 }
 
@@ -194,18 +198,42 @@ keyring_args() {
     if [[ -z $Keyring && -f /usr/share/keyrings/debian-role-keys.gpg ]]; then KeyringArgs+=(--keyring /usr/share/keyrings/debian-role-keys.gpg); fi
 }
 release_file() {
-    local base=$1 suite=$2 out=$3
+    local base=$1 suite=$2 out=$3 allow_https_missing_key=${4:-0}
     keyring_args
     if fetch "$base/dists/$suite/InRelease" "$out.signed" 16777216; then
-        gpgv "${KeyringArgs[@]}" --output "$out" "$out.signed" 2>"$WORK/gpg-error" || return 1
+        if ! gpgv "${KeyringArgs[@]}" --output "$out" "$out.signed" 2>"$WORK/gpg-error"; then
+            if (( allow_https_missing_key )) && [[ -z $Keyring ]] && official_debian_mirror "$base/dists/$suite/InRelease" && missing_archive_key; then
+                cleartext_release "$out.signed" "$out" || return 1
+                message "Warning: Debian archive key is unavailable; resolving stable metadata over HTTPS from $base"
+            else
+                return 1
+            fi
+        fi
     else
         fetch "$base/dists/$suite/Release" "$out" 16777216 || return 1
         fetch "$base/dists/$suite/Release.gpg" "$out.sig" 1048576 || return 1
-        gpgv "${KeyringArgs[@]}" "$out.sig" "$out" 2>"$WORK/gpg-error" || return 1
+        if ! gpgv "${KeyringArgs[@]}" "$out.sig" "$out" 2>"$WORK/gpg-error"; then
+            if (( allow_https_missing_key )) && [[ -z $Keyring ]] && official_debian_mirror "$base/dists/$suite/Release" && missing_archive_key; then
+                message "Warning: Debian archive key is unavailable; resolving stable metadata over HTTPS from $base"
+            else
+                return 1
+            fi
+        fi
     fi
     local code
     code=$(sed -n 's/^Codename: *//p' "$out")
     case $suite in stable) [[ $code =~ ^[a-z]+$ ]];; *) [[ $code == "$suite" ]];; esac
+}
+cleartext_release() {
+    local signed=$1 out=$2
+    awk '
+      /^-----BEGIN PGP SIGNED MESSAGE-----$/ {begin=1; header=1; next}
+      begin && header && /^$/ {header=0; body=1; next}
+      /^-----BEGIN PGP SIGNATURE-----$/ {body=0; signature=1; exit}
+      body {sub(/^- /, ""); print}
+      END {if(!begin || !signature) exit 1}
+    ' "$signed" > "$out"
+    [[ -s $out ]]
 }
 release_digest() {
     # Only SHA256 entries count; reject duplicate paths and malformed entries.
@@ -258,7 +286,7 @@ resolve_suite() {
         if (( DryRun )); then input=13
         else
             for base in "${Mirrors[@]}"; do
-                if release_file "$base" stable "$WORK/stable-release"; then
+                if release_file "$base" stable "$WORK/stable-release" 1; then
                     code=$(sed -n 's/^Codename: *//p' "$WORK/stable-release")
                     version=$(sed -n 's/^Version: *//p' "$WORK/stable-release"); version=${version%%.*}
                     [[ $code =~ ^[a-z]{3,20}$ && $version =~ ^[0-9]{1,3}$ ]] || continue

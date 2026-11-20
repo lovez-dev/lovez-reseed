@@ -97,7 +97,11 @@ parse() {
         if (( boolean )); then
             case ${val,,} in true|t|1) val=1;; false|f|0) val=0;; *) die "Invalid boolean for --$name";; esac
         elif [[ $val == *$'\n'* || $val == *$'\r'* ]]; then die "--$name must not contain newlines"; fi
-        case $field in KeepPaths) KeepPaths+=("$val");; *) printf -v "$field" '%s' "$val";; esac
+        case $field in
+            KeepPaths) KeepPaths+=("$val");;
+            Install) [[ -z $val ]] || Install+=" $val";;
+            *) printf -v "$field" '%s' "$val";;
+        esac
     done
 }
 

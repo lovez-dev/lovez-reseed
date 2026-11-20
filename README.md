@@ -19,7 +19,7 @@ curl -fsSL https://raw.githubusercontent.com/lovez-dev/reos/main/install.sh \
 
 The installer verifies its download against the signed checksum from the same main-branch commit, installs `reos`, prepares the installer files and a one-time GRUB entry, skips confirmation, and reboots into the reinstallation. The login password is shown once after preparation; save it before the machine reboots.
 
-Kernel and initrd downloads are checked against Debian's signed release metadata. If an official Debian HTTPS mirror's signing key is missing locally, `reos` uses that mirror's HTTPS checksum manifest, warns that GPG authentication was unavailable, and still verifies each file's SHA-256. Custom mirrors do not use this fallback.
+Stable release detection and kernel/initrd downloads use Debian's signed release metadata. If the default Debian keyring lacks an archive key, `reos` can resolve stable metadata or use an official Debian HTTPS checksum manifest over TLS and prints a warning; installer files are still checked against SHA-256 digests from that manifest. Custom mirrors and an explicitly selected keyring do not use this fallback.
 
 To preview the configuration without downloading installer files or changing boot configuration:
 
@@ -63,7 +63,7 @@ reos reset           # Cancel: remove the GRUB entry and installer files.
 | `--esp MB` | EFI system partition size; minimum and default 106 MB. |
 | `--system-size SIZE` | Cap the root partition, e.g. `10G`; minimum 2G. Remaining space stays unallocated. |
 | `--keep-part /dev/vda3` | Preserve an explicitly named partition; repeatable. |
-| `--install "PKG ..."` | Extra packages; defaults to `ca-certificates curl`. |
+| `--install "PKG ..."` | Add packages to the default `ca-certificates curl` set. |
 | `--post-install PATH\|URL` | First-boot script; local file or HTTP(S) URL, up to 1 MiB. |
 | `--firmware` | Include non-free firmware; physical machines only. |
 | `--swap-size SIZE` | Swapfile size, e.g. `512M`, `2G`, `2048MB`; range 64M to 1T. |

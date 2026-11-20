@@ -183,16 +183,19 @@ completion_banner
                 self.assertNotEqual(result.returncode, 0)
         shell('parse --mirror https://example.org/debian --proxy socks5h://user:pass@host:1080 --dns "1.1.1.1 2606:4700:4700::1111" --ipv6 ::1/128\nvalidate')
 
-    def test_extra_packages_defaults_overrides_and_dependencies(self):
+    def test_extra_packages_append_to_defaults_and_dependencies(self):
         for args, expected, absent in [
             ('', ['ca-certificates', 'curl', 'ifupdown', 'unattended-upgrades'], ['sudo', 'wget', 'net-tools', 'unzip']),
-            ('--install "git htop" --user admin', ['git', 'htop', 'ifupdown', 'sudo', 'unattended-upgrades'], ['curl', 'ca-certificates']),
-            ('--install "" --unattended=false', ['ifupdown'], ['curl', 'sudo', 'unattended-upgrades']),
+            ('--install "git htop" --user admin', ['ca-certificates', 'curl', 'git', 'htop', 'ifupdown', 'sudo', 'unattended-upgrades'], ['wget', 'net-tools', 'unzip']),
+            ('--install "" --unattended=false', ['ca-certificates', 'curl', 'ifupdown'], ['sudo', 'unattended-upgrades']),
+            ('--install "git htop" --install vim', ['ca-certificates', 'curl', 'git', 'htop', 'vim', 'ifupdown', 'unattended-upgrades'], ['sudo']),
         ]:
             with self.subTest(args=args):
                 result = shell(f'parse {args}\nvalidate\nconfigure_payload\nprintf "%s" "$Install"')
                 packages = result.stdout.split()
                 self.assertCountEqual(packages, expected)
+                preseed = shell(f'parse {args}\nvalidate\nconfigure_payload\nasset_preseed_tmpl').stdout
+                self.assertIn('d-i pkgsel/include string ' + ' '.join(expected), preseed)
                 for name in absent:
                     self.assertNotIn(name, packages)
 
@@ -270,6 +273,61 @@ resolve_suite
 ''', ok=False)
                 self.assertNotEqual(result.returncode, 0)
         shell("DryRun=1; fetch() { die 'Unexpected network access'; }; resolve_suite; [[ $Suite == trixie && $ReleaseNumber == 13 ]]")
+
+    def test_stable_resolves_over_official_https_when_archive_key_is_missing(self):
+        with tempfile.TemporaryDirectory() as temp:
+            setup = f'''WORK={shlex.quote(temp)}; Mirrors=(https://deb.debian.org/debian)
+fetch() {{
+    cat > "$2" <<'RELEASE'
+-----BEGIN PGP SIGNED MESSAGE-----
+Hash: SHA512
+
+Origin: Debian
+Codename: trixie
+Version: 13.4
+-----BEGIN PGP SIGNATURE-----
+signature
+-----END PGP SIGNATURE-----
+RELEASE
+}}
+gpgv() {{ printf 'gpg: NO_PUBKEY test-key\\n' >&2; return 1; }}
+'''
+            result = shell(setup + 'resolve_suite; [[ $Suite == trixie && $ReleaseNumber == 13 ]]')
+            self.assertIn('resolving stable metadata over HTTPS', result.stdout)
+
+    def test_stable_does_not_bypass_missing_key_for_custom_mirror_or_keyring(self):
+        with tempfile.TemporaryDirectory() as temp:
+            setup = f'''WORK={shlex.quote(temp)}
+fetch() {{
+    cat > "$2" <<'RELEASE'
+-----BEGIN PGP SIGNED MESSAGE-----
+Hash: SHA512
+
+Origin: Debian
+Codename: trixie
+Version: 13.4
+-----BEGIN PGP SIGNATURE-----
+signature
+-----END PGP SIGNATURE-----
+RELEASE
+}}
+gpgv() {{ printf 'gpg: NO_PUBKEY test-key\\n' >&2; return 1; }}
+'''
+            for mirror, keyring in [('https://mirror.example/debian', ''), ('https://deb.debian.org/debian', '/tmp/custom.gpg')]:
+                with self.subTest(mirror=mirror, keyring=keyring):
+                    result = shell(f'''{setup}
+Mirrors=({shlex.quote(mirror)}); Keyring={shlex.quote(keyring)}; resolve_suite
+''', ok=False)
+                    self.assertNotEqual(result.returncode, 0)
+
+    def test_stable_does_not_bypass_an_invalid_signature(self):
+        with tempfile.TemporaryDirectory() as temp:
+            setup = f'''WORK={shlex.quote(temp)}; Mirrors=(https://deb.debian.org/debian)
+fetch() {{ printf 'signed metadata' > "$2"; }}
+gpgv() {{ printf 'gpg: BAD signature\n' >&2; return 1; }}
+'''
+            result = shell(setup + 'resolve_suite', ok=False)
+            self.assertNotEqual(result.returncode, 0)
 
     def test_template_branches_and_script_syntax(self):
         variants = [
