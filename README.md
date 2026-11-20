@@ -19,6 +19,8 @@ curl -fsSL https://raw.githubusercontent.com/lovez-dev/reos/main/install.sh \
 
 The installer verifies its download against the signed checksum from the same main-branch commit, installs `reos`, prepares the installer files and a one-time GRUB entry, skips confirmation, and reboots into the reinstallation. The login password is shown once after preparation; save it before the machine reboots.
 
+Kernel and initrd downloads are checked against Debian's signed release metadata. If an official Debian HTTPS mirror's signing key is missing locally, `reos` uses that mirror's HTTPS checksum manifest, warns that GPG authentication was unavailable, and still verifies each file's SHA-256. Custom mirrors do not use this fallback.
+
 To preview the configuration without downloading installer files or changing boot configuration:
 
 ```sh

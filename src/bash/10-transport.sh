@@ -1,6 +1,8 @@
 fetch() {
     local url=$1 dest=$2 limit=${3:-67108864}
-    local args=(--silent --show-error --fail --location --retry 2 --connect-timeout 15 --max-time 1800 --max-filesize "$limit" --proto '=http,https' --proto-redir '=http,https')
+    local protocols=http,https
+    official_debian_mirror "$url" && protocols=https
+    local args=(--silent --show-error --fail --location --retry 2 --connect-timeout 15 --max-time 1800 --max-filesize "$limit" --proto "=$protocols" --proto-redir "=$protocols")
     [[ -z $Proxy ]] || args+=(--proxy "$Proxy")
     curl "${args[@]}" --output "$dest" --url "$url" || return 1
     [[ $(stat -c %s "$dest") -le $limit ]]
@@ -40,6 +42,7 @@ check_digest() {
 }
 authenticate() {
     local url=$1 file=$2 rest base suite path digest hash size
+    : > "$WORK/gpg-error"
     if [[ $url == */dists/* ]]; then
         base=${url%%/dists/*}; rest=${url#*/dists/}; suite=${rest%%/*}; path=${rest#*/}
         release_file "$base" "$suite" "$WORK/auth-release" || return 1
@@ -51,6 +54,16 @@ authenticate() {
         keyring_args
         gpgv "${KeyringArgs[@]}" "$WORK/detached.sig" "$file" 2>"$WORK/gpg-error"
     fi
+}
+official_debian_mirror() {
+    case $1 in
+        https://deb.debian.org/debian/*|https://cdn-aws.deb.debian.org/debian/*|https://ftp.debian.org/debian/*|https://archive.debian.org/debian/*) return 0;;
+        *) return 1;;
+    esac
+}
+missing_archive_key() {
+    [[ -s $WORK/gpg-error ]] || return 1
+    grep -Eiq 'NO_PUBKEY|no public key|public key not found' "$WORK/gpg-error"
 }
 mirrors() {
     Mirrors=()
@@ -85,20 +98,27 @@ resolve_suite() {
 installer_download_set() {
     local directory=$1
     shift
-    local base parent url prefix name entry hash index complete found=0
+    local base parent url prefix name entry hash index complete found=0 authenticated
     local names=("$@") urls=() hashes=()
     mkdir -p -- "$directory"
     for base in "${DownloadBases[@]}"; do
-        urls=(); prefix=
+        urls=(); prefix=; authenticated=0
         if [[ $base == */netboot/* ]]; then
             parent=${base%%/netboot/*}; prefix=${base#"$parent"/}
             urls+=("$parent/SHA256SUMS")
+        else
+            urls+=("$base/SHA256SUMS")
         fi
-        urls+=("$base/SHA256SUMS")
         hashes=()
         for url in "${urls[@]}"; do
             fetch "$url" "$WORK/SHA256SUMS" 1048576 || continue
-            authenticate "$url" "$WORK/SHA256SUMS" || continue
+            if authenticate "$url" "$WORK/SHA256SUMS"; then
+                authenticated=1
+            elif official_debian_mirror "$base" && missing_archive_key; then
+                message "Archive signing key is unavailable; using HTTPS SHA-256 manifest from $url"
+            else
+                continue
+            fi
             hashes=()
             for name in "${names[@]}"; do
                 entry=$name
@@ -110,8 +130,9 @@ installer_download_set() {
             (( ${#hashes[@]} != ${#names[@]} )) || break
         done
         if (( ${#hashes[@]} != ${#names[@]} )); then
-            message "No complete authenticated SHA-256 set at $base; trying next mirror"; continue
+            message "No complete SHA-256 set at $base; trying next mirror"; continue
         fi
+        (( authenticated )) || message 'Warning: installer manifest was not GPG-authenticated; HTTPS and per-file SHA-256 checks passed.'
         # Read one manifest before downloading; retry the whole set on a new mirror.
         complete=1
         for index in "${!names[@]}"; do

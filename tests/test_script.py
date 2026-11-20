@@ -420,6 +420,56 @@ authenticate() {{ return 0; }}
             self.assertNotEqual(result.returncode, 0)
             self.assertIn('SHA-256 mismatch: linux', result.stderr)
 
+    def test_netboot_manifest_uses_signed_parent_images_directory(self):
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            digest_linux = hashlib.sha256(b'linux').hexdigest()
+            digest_initrd = hashlib.sha256(b'initrd').hexdigest()
+            setup = f'''WORK={shlex.quote(temp)}; DownloadBases=(https://mirror.example/debian/dists/trixie/main/installer-amd64/current/images/netboot/debian-installer/amd64)
+fetch() {{
+    [[ $1 != *SHA256SUMS ]] || printf '%s\\n' "$1" >> "$WORK/manifests"
+    case $1 in
+      */current/images/SHA256SUMS) printf '%s  ./netboot/debian-installer/amd64/linux\\n%s  ./netboot/debian-installer/amd64/initrd.gz\\n' {digest_linux} {digest_initrd} > "$2";;
+      */linux) printf linux > "$2";;
+      */initrd.gz) printf initrd > "$2";;
+      *) return 1;;
+    esac
+}}
+authenticate() {{ return 0; }}
+'''
+            result = shell(setup + 'installer_download_set "$WORK/output" linux initrd.gz; [[ $DownloadMirror == *netboot/debian-installer/amd64 ]]')
+            self.assertEqual((directory / 'output/linux').read_text(), 'linux')
+            self.assertEqual((directory / 'output/initrd.gz').read_text(), 'initrd')
+            self.assertEqual((directory / 'manifests').read_text().splitlines(), [
+                'https://mirror.example/debian/dists/trixie/main/installer-amd64/current/images/SHA256SUMS',
+            ])
+
+    def test_official_netboot_manifest_can_use_https_when_archive_key_is_missing(self):
+        with tempfile.TemporaryDirectory() as temp:
+            digest = hashlib.sha256(b'linux').hexdigest()
+            setup = f'''WORK={shlex.quote(temp)}; DownloadBases=(https://deb.debian.org/debian/dists/trixie/main/installer-amd64/current/images/netboot/debian-installer/amd64)
+fetch() {{
+    case $1 in
+      */current/images/SHA256SUMS) printf '%s  ./netboot/debian-installer/amd64/linux\\n' {digest} > "$2";;
+      */linux) printf linux > "$2";;
+      *) return 1;;
+    esac
+}}
+authenticate() {{ printf 'gpg: NO_PUBKEY test-key\\n' > "$WORK/gpg-error"; return 1; }}
+'''
+            result = shell(setup + 'installer_download linux "$WORK/output"')
+            self.assertEqual((pathlib.Path(temp) / 'output').read_text(), 'linux')
+            self.assertIn('not GPG-authenticated', result.stdout)
+
+    def test_custom_mirror_does_not_bypass_missing_archive_key(self):
+        with tempfile.TemporaryDirectory() as temp:
+            digest = hashlib.sha256(b'linux').hexdigest()
+            setup = f'''WORK={shlex.quote(temp)}; DownloadBases=(https://mirror.example/debian/dists/trixie/main/installer-amd64/current/images/netboot/debian-installer/amd64)
+fetch() {{ printf '%s  ./netboot/debian-installer/amd64/linux\\n' {digest} > "$2"; }}
+authenticate() {{ printf 'gpg: NO_PUBKEY test-key\\n' > "$WORK/gpg-error"; return 1; }}
+'''
+            self.assertNotEqual(shell(setup + 'installer_download linux "$WORK/output"', ok=False).returncode, 0)
+
     def test_sha256_and_metadata_duplicates(self):
         with tempfile.TemporaryDirectory() as temp:
             p = pathlib.Path(temp)
